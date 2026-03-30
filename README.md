@@ -258,6 +258,16 @@ src/healthpipe/
         compliance.py    # Compliance report generation
 ```
 
+## Demo
+
+Run the offline walkthrough with:
+
+```bash
+uv run python examples/demo.py
+```
+
+For CSV, FHIR, and synthetic-data scenarios, see the larger examples in `examples/`.
+
 ## Development
 
 ```bash
