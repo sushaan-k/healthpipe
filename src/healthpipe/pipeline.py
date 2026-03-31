@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from healthpipe.audit.lineage import LineageTracker
 from healthpipe.audit.logger import AuditLog
 from healthpipe.deidentify.ner import ClinicalNER
-from healthpipe.deidentify.patterns import PatternMatcher
+from healthpipe.deidentify.patterns import DetectionMethod, PatternMatcher
 from healthpipe.deidentify.safe_harbor import (
     DeidentifiedDataset,
     SafeHarborConfig,
@@ -261,41 +261,129 @@ class Pipeline:
         pattern_matcher: PatternMatcher,
     ) -> list[DryRunFinding]:
         """Scan a single record's string fields for PHI."""
-        findings: list[DryRunFinding] = []
+        candidates: list[tuple[int, int, DryRunFinding]] = []
         strings = _collect_strings_with_paths(record.data)
 
         for field_path, text in strings:
             # NER scan
             entities = ner.extract(text)
             for ent in entities:
-                findings.append(
-                    DryRunFinding(
-                        record_id=record.id,
-                        category=ent.phi_category,
-                        original=ent.text,
-                        replacement=f"[{ent.phi_category}]",
-                        detection_method=ent.detection_method,
-                        confidence=ent.confidence,
-                        field_path=field_path,
+                candidates.append(
+                    (
+                        ent.start,
+                        ent.end,
+                        DryRunFinding(
+                            record_id=record.id,
+                            category=ent.phi_category,
+                            original=ent.text,
+                            replacement=f"[{ent.phi_category}]",
+                            detection_method=ent.detection_method,
+                            confidence=ent.confidence,
+                            field_path=field_path,
+                        ),
                     )
                 )
 
             # Pattern scan
             matches = pattern_matcher.scan(text)
             for m in matches:
-                findings.append(
-                    DryRunFinding(
-                        record_id=record.id,
-                        category=m.category,
-                        original=m.original,
-                        replacement=m.replacement,
-                        detection_method=m.detection_method,
-                        confidence=m.confidence,
-                        field_path=field_path,
+                candidates.append(
+                    (
+                        m.start,
+                        m.end,
+                        DryRunFinding(
+                            record_id=record.id,
+                            category=m.category,
+                            original=m.original,
+                            replacement=m.replacement,
+                            detection_method=m.detection_method,
+                            confidence=m.confidence,
+                            field_path=field_path,
+                        ),
                     )
                 )
 
-        return findings
+        return Pipeline._deduplicate_dry_run_findings(candidates)
+
+    @staticmethod
+    def _deduplicate_dry_run_findings(
+        candidates: list[tuple[int, int, DryRunFinding]],
+    ) -> list[DryRunFinding]:
+        """Remove exact duplicates and overlapping lower-quality detections."""
+        if not candidates:
+            return []
+
+        candidates.sort(
+            key=lambda item: (
+                item[2].field_path,
+                item[0],
+                item[1],
+                -Pipeline._finding_priority(item[2]),
+                -item[2].confidence,
+            )
+        )
+
+        selected: list[tuple[int, int, DryRunFinding]] = []
+        exact_seen: set[tuple[str, int, int, str, str]] = set()
+        for candidate in candidates:
+            start, end, finding = candidate
+            exact_key = (
+                finding.field_path,
+                start,
+                end,
+                finding.category,
+                finding.original,
+            )
+            if exact_key in exact_seen:
+                continue
+            exact_seen.add(exact_key)
+
+            if (
+                selected
+                and selected[-1][2].field_path == finding.field_path
+                and start < selected[-1][1]
+            ):
+                if Pipeline._should_replace_finding(candidate, selected[-1]):
+                    selected[-1] = candidate
+                continue
+
+            selected.append(candidate)
+
+        return [finding for _start, _end, finding in selected]
+
+    @staticmethod
+    def _should_replace_finding(
+        candidate: tuple[int, int, DryRunFinding],
+        incumbent: tuple[int, int, DryRunFinding],
+    ) -> bool:
+        """Prefer the most reliable finding when spans overlap."""
+        cand_start, cand_end, cand = candidate
+        inc_start, inc_end, inc = incumbent
+
+        cand_priority = Pipeline._finding_priority(cand)
+        inc_priority = Pipeline._finding_priority(inc)
+        if cand_priority != inc_priority:
+            return cand_priority > inc_priority
+
+        if cand.confidence != inc.confidence:
+            return cand.confidence > inc.confidence
+
+        cand_length = cand_end - cand_start
+        inc_length = inc_end - inc_start
+        if cand_length != inc_length:
+            return cand_length > inc_length
+
+        return cand.original < inc.original
+
+    @staticmethod
+    def _finding_priority(finding: DryRunFinding) -> int:
+        """Score dry-run findings for overlap resolution."""
+        priorities = {
+            DetectionMethod.PATTERN: 3,
+            DetectionMethod.NER: 2,
+            DetectionMethod.CONTEXT: 1,
+        }
+        return priorities.get(finding.detection_method, 0)
 
     @property
     def lineage(self) -> LineageTracker | None:
