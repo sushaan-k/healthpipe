@@ -55,10 +55,7 @@ class TestDryRun:
     async def test_dry_run_returns_findings_with_confidence(
         self, tmp_path: Path
     ) -> None:
-        csv_content = (
-            "patient_id,notes\n"
-            "P001,SSN: 123-45-6789\n"
-        )
+        csv_content = "patient_id,notes\nP001,SSN: 123-45-6789\n"
         fpath = tmp_path / "notes.csv"
         fpath.write_text(csv_content)
 
@@ -77,10 +74,7 @@ class TestDryRun:
 
     @pytest.mark.asyncio
     async def test_dry_run_preserves_original_data(self, tmp_path: Path) -> None:
-        csv_content = (
-            "patient_id,ssn\n"
-            "P001,123-45-6789\n"
-        )
+        csv_content = "patient_id,ssn\nP001,123-45-6789\n"
         fpath = tmp_path / "data.csv"
         fpath.write_text(csv_content)
 
