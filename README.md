@@ -9,6 +9,13 @@
 
 ---
 
+## At a Glance
+
+- Unified ingest layer for FHIR, HL7v2, CSV, and PDF/OCR inputs
+- Multi-layer de-identification with safe-harbor oriented controls
+- Differential privacy utilities and privacy-budget tracking
+- Synthetic data generation, validation, lineage, and audit reporting
+
 ## The Problem
 
 Healthcare AI is stuck. Not because the models are bad -- because the **data infrastructure is broken**.
