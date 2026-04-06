@@ -85,6 +85,10 @@ from healthpipe.privacy.differential import (
     private_stats,
 )
 from healthpipe.privacy.k_anonymity import KAnonymityChecker, LDiversityChecker
+from healthpipe.privacy.reidentification_risk import (
+    ReidentificationRisk,
+    RiskScoreReport,
+)
 
 # --- Synthetic data -----------------------------------------------------------
 from healthpipe.synthetic.generator import SyntheticGenerator, synthesize
@@ -132,9 +136,11 @@ __all__ = [
     "PipelineResult",
     "PrivacyBudget",
     "PrivacyError",
+    "ReidentificationRisk",
     "ReidentificationRiskError",
     "ReidentificationValidator",
     "ResourceType",
+    "RiskScoreReport",
     "SafeHarborConfig",
     "SafeHarborEngine",
     "SyntheticDataError",
