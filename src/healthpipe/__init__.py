@@ -71,7 +71,14 @@ from healthpipe.ingest.schema import (
 )
 
 # --- Pipeline -----------------------------------------------------------------
-from healthpipe.pipeline import Pipeline, PipelineConfig, PipelineResult, ingest
+from healthpipe.pipeline import (
+    DryRunFinding,
+    DryRunReport,
+    Pipeline,
+    PipelineConfig,
+    PipelineResult,
+    ingest,
+)
 
 # --- Privacy ------------------------------------------------------------------
 from healthpipe.privacy.budget import PrivacyBudget
@@ -110,6 +117,8 @@ __all__ = [
     "DateShiftError",
     "DeidentificationError",
     "DeidentifiedDataset",
+    "DryRunFinding",
+    "DryRunReport",
     "FHIRAuth",
     "FHIRSource",
     "FHIRValidationError",
