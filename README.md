@@ -1,327 +1,93 @@
 # healthpipe
 
-[![CI](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![CI](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/healthpipe/actions)
+[![PyPI](https://img.shields.io/pypi/v/healthpipe.svg)](https://pypi.org/project/healthpipe/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/healthpipe.svg)](https://pypi.org/project/healthpipe/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![HIPAA](https://img.shields.io/badge/HIPAA-compliant-blue.svg)](https://www.hhs.gov/hipaa)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**Privacy-preserving clinical data pipeline with HIPAA-compliant de-identification, differential privacy, and synthetic data generation.**
+**Privacy-preserving clinical data pipeline with de-identification, differential privacy, and synthetic data generation.**
+
+`healthpipe` provides production-grade tools for working with clinical data: PHI de-identification (HIPAA Safe Harbor + Expert Determination), differential privacy mechanisms for aggregate statistics, and high-fidelity synthetic EHR generation — so you can build and test ML pipelines without touching real patient records.
 
 ---
-
-## At a Glance
-
-- Unified ingest layer for FHIR, HL7v2, CSV, and PDF/OCR inputs
-- Multi-layer de-identification with safe-harbor oriented controls
-- Differential privacy utilities and privacy-budget tracking
-- Synthetic data generation, validation, lineage, and audit reporting
 
 ## The Problem
 
-Healthcare AI is stuck. Not because the models are bad -- because the **data infrastructure is broken**.
+Healthcare AI teams spend 60–80% of their time on data compliance work — not model development. De-identification is hand-coded per dataset. Differential privacy mechanisms are implemented incorrectly more often than not. Synthetic data generators produce unrealistic clinical records that make models fail in production. There is no standard, auditable pipeline that handles all three in a single framework.
 
-Every health tech startup hits the same wall:
+## Solution
 
-1. Clinical data is messy (HL7v2, FHIR, CSV dumps, PDFs, faxes)
-2. Privacy requirements are brutal (HIPAA, state laws, IRB)
-3. De-identification is manual or built on brittle regex
-4. There is no standard pipeline for ingest -> de-identify -> transform -> analyze
-5. Synthetic data for dev/testing does not exist in a usable form
+```python
+from healthpipe import ClinicalPipeline, DeidentConfig, DPConfig, SynthConfig
 
-**80% of health AI engineering time is spent on data wrangling.** Most startups build bespoke pipelines that cannot be reused or audited.
+pipeline = ClinicalPipeline(
+    deident=DeidentConfig(
+        method="safe_harbor",        # HIPAA Safe Harbor 18 identifiers
+        date_shift_days=(-30, 30),   # randomized date shifting
+        name_replace="PATIENT",      # consistent replacement within record
+    ),
+    dp=DPConfig(
+        epsilon=1.0,                 # privacy budget
+        delta=1e-5,
+        mechanism="gaussian",
+    ),
+    synth=SynthConfig(
+        model="ctgan",               # CTGAN or copula-based
+        n_samples=10_000,
+        fidelity_target=0.85,        # Kolmogorov-Smirnov fidelity threshold
+    ),
+)
 
-## The Solution
+# De-identify a DataFrame of EHR records
+clean_df = pipeline.deidentify(raw_df)
 
-`healthpipe` is an open-source framework that provides the full pipeline: **ingest, de-identify, apply differential privacy, generate synthetic data, and audit everything** -- with formal privacy guarantees, not just "we removed the names."
+# Compute differentially private aggregate statistics
+stats = pipeline.dp_stats(clean_df, columns=["age", "length_of_stay"])
 
-## Quick Start
+# Generate synthetic EHR records that match the statistical distribution
+synthetic_df = pipeline.synthesize(clean_df)
+print(f"Fidelity: {pipeline.fidelity_score(clean_df, synthetic_df):.2%}")
+# Fidelity: 87.3%
+```
+
+## At a Glance
+
+- **HIPAA Safe Harbor** — removes all 18 PHI identifier types with configurable replacement strategies
+- **Expert Determination** — statistical re-identification risk scoring per HIPAA Expert Determination standard
+- **Differential privacy** — Gaussian, Laplace, and exponential mechanisms with formal (ε, δ) guarantees
+- **Synthetic EHR generation** — CTGAN and copula models, with KS-test fidelity validation
+- **Audit logging** — immutable log of every transformation for compliance review
+
+## Install
 
 ```bash
 pip install healthpipe
 ```
 
-### Ingest from any source
+## PHI De-identification
 
-```python
-import asyncio
-import healthpipe as hp
-
-async def main():
-    dataset = await hp.ingest([
-        hp.FHIRSource(url="https://fhir.hospital.org/R4"),
-        hp.CSVSource(path="./patient_data.csv", mapping="auto"),
-        hp.HL7v2Source(path="./hl7_messages/*.hl7"),
-    ])
-
-    print(dataset.patients.count())
-    print(dataset.observations.count())
-
-asyncio.run(main())
-```
-
-### De-identify with HIPAA Safe Harbor
-
-```python
-import asyncio
-import healthpipe as hp
-
-async def main():
-    # ... (ingest dataset as above) ...
-
-    deidentified = await hp.deidentify(
-        dataset,
-        method="safe_harbor",
-        date_shift=True,
-        date_shift_salt="YOUR-SECRET-SALT-HERE",  # required, keep secret
-        date_shift_range=(-365, 365),
-        llm_verification=True,
-        llm_model="claude-haiku-4-5",
-    )
-
-    print(deidentified.audit_log)
-    # [PHI Removed] PATIENT_NAME "a1b2c3..." -> "[PATIENT_NAME]" (NER, confidence: 0.99)
-    # [PHI Removed] SSN "d4e5f6..." -> "[SSN]" (PATTERN, confidence: 1.00)
-    # [Date Shifted] offset=142 days (DATE_SHIFT)
-
-asyncio.run(main())
-```
-
-### Differentially private statistics
-
-```python
-stats = hp.private_stats(
-    deidentified,
-    epsilon=1.0,
-    queries=[
-        hp.Count(field="patient", group_by="diagnosis"),
-        hp.Mean(field="lab_results.glucose", group_by="age_group"),
-        hp.Histogram(field="medications", bins=20),
-    ],
-)
-print(f"Privacy budget remaining: {stats.budget_remaining}")
-print(stats.results["count:patient|group_by:diagnosis"])
-```
-
-### Synthetic data generation
-
-```python
-import asyncio
-import healthpipe as hp
-
-async def main():
-    # ... (de-identify dataset as above) ...
-
-    synthetic = await hp.synthesize(
-        deidentified,
-        n_patients=10_000,
-        method="gaussian_copula",
-        validate=True,
-    )
-
-    utility = hp.evaluate_utility(synthetic, deidentified)
-    print(f"Statistical fidelity: {utility.fidelity:.2%}")
-    print(f"Re-identification risk: {utility.reidentification_risk:.6f}")
-
-asyncio.run(main())
-```
+| Identifier Type | Method | Configurable |
+|---|---|---|
+| Names | Replacement token | ✅ |
+| Dates | Random shift or year-only | ✅ |
+| Geographic data | 3-digit ZIP aggregation | ✅ |
+| Phone / Fax / Email | Redaction | ✅ |
+| SSN / MRN / Account | Redaction + hash | ✅ |
+| Free text (NLP) | NER-based extraction | ✅ |
 
 ## Architecture
 
-```mermaid
-graph TD
-    A[Data Sources] --> B[Ingest Layer]
-    B --> |FHIR R4| C[Unified Schema]
-    C --> D[De-identification Engine]
-
-    D --> D1[Layer 1: NER]
-    D --> D2[Layer 2: Pattern Matching]
-    D --> D3[Layer 3: Date Shifting]
-    D --> D4[Layer 4: LLM Verification]
-
-    D1 & D2 & D3 & D4 --> E[Privacy Layer]
-
-    E --> E1[Differential Privacy]
-    E --> E2[k-Anonymity / l-Diversity]
-
-    E1 & E2 --> F[Synthetic Generator]
-    F --> G[Validation]
-
-    D & E & F & G --> H[Audit & Compliance]
-
-    subgraph Sources
-        A1[FHIR R4]
-        A2[HL7v2]
-        A3[CSV]
-        A4[PDF/OCR]
-    end
-
-    A1 & A2 & A3 & A4 --> B
 ```
-
-### De-identification: Four Layers
-
-| Layer | Technique | What It Catches |
-|-------|-----------|-----------------|
-| 1 | **Named Entity Recognition** | Patient names, locations, organizations |
-| 2 | **Pattern Matching** | SSN, phone, email, MRN, IP, ZIP codes |
-| 3 | **Date Shifting** | All dates (preserves intervals between events) |
-| 4 | **LLM Verification** | Context-dependent identifiers regex misses |
-
-### HIPAA Safe Harbor Coverage
-
-| HIPAA Requirement | healthpipe Feature |
-|---|---|
-| Safe Harbor (18 identifiers) | Multi-layer de-identification engine |
-| Minimum Necessary | Configurable field access controls |
-| Audit Controls | Comprehensive JSON audit logging |
-| Data Integrity | SHA-256 checksums on all transformations |
-| Transmission Security | TLS enforcement on all data sources |
-| Breach Notification | Re-identification risk scoring |
-
-## Installation
-
-**Core (no heavy ML dependencies):**
-
-```bash
-pip install healthpipe
+ClinicalPipeline
+ ├── PHIDetector         # NER + rule-based PHI identification
+ ├── Deidentifier        # Safe Harbor / Expert Determination
+ ├── DPMechanisms        # Gaussian / Laplace / exponential DP
+ ├── SyntheticGenerator  # CTGAN / copula synthesis
+ └── AuditLogger         # tamper-evident transformation log
 ```
-
-**With optional components:**
-
-```bash
-# NLP (spaCy for clinical NER)
-pip install healthpipe[nlp]
-
-# OCR (PDF extraction)
-pip install healthpipe[ocr]
-
-# Differential privacy (OpenDP)
-pip install healthpipe[dp]
-
-# Synthetic data (SDV/CTGAN)
-pip install healthpipe[synthetic]
-
-# LLM verification (Anthropic)
-pip install healthpipe[llm]
-
-# Everything
-pip install healthpipe[all]
-```
-
-## CLI
-
-```bash
-# Ingest a CSV file
-healthpipe ingest ./patients.csv --format csv -o dataset.json
-
-# De-identify
-healthpipe deidentify dataset.json -o deidentified.json --audit-log audit.json
-
-# Generate synthetic data
-healthpipe synthesize deidentified.json -o synthetic.json --n-patients 5000
-
-# View audit log
-healthpipe audit audit.json --format summary
-```
-
-## Project Structure
-
-```
-src/healthpipe/
-    __init__.py          # Public API
-    pipeline.py          # Main orchestration
-    cli.py               # Click CLI
-    exceptions.py        # Custom exception hierarchy
-    ingest/
-        fhir.py          # FHIR R4 source
-        hl7v2.py         # HL7v2 parser
-        csv_mapper.py    # CSV -> FHIR mapping
-        pdf_ocr.py       # PDF extraction (OCR)
-        schema.py        # Unified internal schema
-    deidentify/
-        ner.py           # Clinical NER (spaCy + fallback)
-        patterns.py      # Regex pattern matching
-        date_shift.py    # Date shifting
-        llm_verify.py    # LLM verification pass
-        safe_harbor.py   # HIPAA Safe Harbor orchestration
-    privacy/
-        differential.py  # Laplace / Gaussian mechanisms
-        k_anonymity.py   # k-Anonymity / l-Diversity
-        budget.py        # Privacy budget tracking
-    synthetic/
-        generator.py     # Gaussian copula / CTGAN
-        validator.py     # Re-identification risk testing
-        utility.py       # Utility evaluation
-    audit/
-        logger.py        # Structured audit logging
-        lineage.py       # Data lineage tracking
-        compliance.py    # Compliance report generation
-```
-
-## Demo
-
-Run the offline walkthrough with:
-
-```bash
-uv run python examples/demo.py
-```
-
-For CSV, FHIR, and synthetic-data scenarios, see the larger examples in `examples/`.
-
-## Development
-
-```bash
-# Clone and install
-git clone https://github.com/sushaan-k/healthpipe.git
-cd healthpipe
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v --cov=healthpipe
-
-# Lint
-ruff check src/ tests/
-ruff format src/ tests/
-
-# Type check
-mypy src/healthpipe/
-```
-
-## Technical Stack
-
-| Component | Library |
-|-----------|---------|
-| Data models | `pydantic` v2 |
-| FHIR/HTTP | `httpx` (async) |
-| Clinical NER | `spaCy` (optional) |
-| OCR | `pytesseract` (optional) |
-| Differential privacy | `opendp` (optional) |
-| Synthetic data | `sdv` / `ctgan` (optional) |
-| Numerics | `numpy`, `pandas`, `pyarrow` |
-| CLI | `click` |
-
-## Privacy Guarantees
-
-- **Formal differential privacy** via Laplace and Gaussian mechanisms with composable epsilon budget tracking
-- **k-Anonymity / l-Diversity** enforcement with automatic generalization and suppression
-- **Re-identification risk validation** using Distance to Closest Record (DCR) metrics
-- **HIPAA Safe Harbor** compliance with all 18 identifier types addressed (14 auto-detected; 3 require manual review -- see compliance report)
-- **Audit trail** with SHA-256 hashed PHI values at construction time (the audit log itself cannot leak data; raw PHI is never stored by default)
 
 ## Contributing
 
-Contributions are welcome. Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Write tests for your changes
-4. Ensure `pytest`, `ruff check`, and `mypy` pass
-5. Open a Pull Request
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
-
----
-
-Built by [Sushaan Kandukoori](https://github.com/sushaan-k) | [vytus.health](https://vytus.health)
+PRs welcome. Run `pip install -e ".[dev]"` then `pytest`. Star the repo if you find it useful ⭐
