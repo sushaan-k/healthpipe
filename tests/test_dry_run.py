@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from healthpipe.deidentify.ner import NEREntity
+from healthpipe.deidentify.patterns import DetectionMethod, PHIMatch
 from healthpipe.ingest.csv_mapper import CSVSource
+from healthpipe.ingest.schema import ClinicalRecord, ResourceType
 from healthpipe.pipeline import (
     DryRunReport,
     Pipeline,
@@ -127,6 +130,48 @@ class TestDryRun:
 
         assert result.deidentified is None
         assert result.dry_run_report is not None
+
+    def test_scan_record_deduplicates_overlapping_findings(self) -> None:
+        """Overlapping NER/pattern hits should collapse to one dry-run finding."""
+
+        class StubNER:
+            def extract(self, text: str) -> list[NEREntity]:
+                return [
+                    NEREntity(
+                        text="123-45-6789",
+                        label="DATE",
+                        phi_category="SSN",
+                        start=5,
+                        end=16,
+                        confidence=0.85,
+                        detection_method=DetectionMethod.NER,
+                    )
+                ]
+
+        class StubPatternMatcher:
+            def scan(self, text: str) -> list[PHIMatch]:
+                return [
+                    PHIMatch(
+                        category="SSN",
+                        original="123-45-6789",
+                        replacement="[SSN]",
+                        start=5,
+                        end=16,
+                        confidence=0.95,
+                        detection_method=DetectionMethod.PATTERN,
+                    )
+                ]
+
+        record = ClinicalRecord(
+            id="rec-1",
+            resource_type=ResourceType.PATIENT,
+            data={"notes": "SSN: 123-45-6789"},
+        )
+        findings = Pipeline._scan_record(record, StubNER(), StubPatternMatcher())
+
+        assert len(findings) == 1
+        assert findings[0].detection_method == DetectionMethod.PATTERN
+        assert findings[0].original == "123-45-6789"
 
 
 class TestCollectStringsWithPaths:
