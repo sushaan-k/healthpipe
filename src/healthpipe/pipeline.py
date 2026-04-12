@@ -391,9 +391,7 @@ class Pipeline:
         return self._lineage
 
 
-def _collect_strings_with_paths(
-    obj: Any, prefix: str = ""
-) -> list[tuple[str, str]]:
+def _collect_strings_with_paths(obj: Any, prefix: str = "") -> list[tuple[str, str]]:
     """Walk a nested structure and collect ``(dotted_path, value)`` pairs
     for every string leaf."""
     pairs: list[tuple[str, str]] = []
