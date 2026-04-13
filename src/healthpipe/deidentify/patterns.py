@@ -29,22 +29,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
-
-
-class DetectionMethod:
-    """Constants for how a PHI match was detected."""
-
-    PATTERN = "pattern"
-    NER = "ner"
-    CONTEXT = "context"
-
-    #: Default confidence scores per detection method.
-    DEFAULT_CONFIDENCE: ClassVar[dict[str, float]] = {
-        "pattern": 0.95,
-        "ner": 0.85,
-        "context": 0.70,
-    }
+from typing import Any
 
 
 @dataclass
@@ -56,8 +41,7 @@ class PHIMatch:
     replacement: str
     start: int
     end: int
-    confidence: float = 0.95
-    detection_method: str = DetectionMethod.PATTERN
+    confidence: float = 1.0
 
 
 @dataclass
@@ -190,9 +174,6 @@ class PatternMatcher:
     def scan(self, text: str) -> list[PHIMatch]:
         """Find all PHI matches in *text* without modifying it.
 
-        Each match receives a confidence score reflecting the detection
-        method.  Pattern (regex) matches default to 0.95 confidence.
-
         Returns:
             A list of ``PHIMatch`` objects sorted by position.
         """
@@ -206,10 +187,6 @@ class PatternMatcher:
                         replacement=replacement,
                         start=m.start(),
                         end=m.end(),
-                        confidence=DetectionMethod.DEFAULT_CONFIDENCE[
-                            DetectionMethod.PATTERN
-                        ],
-                        detection_method=DetectionMethod.PATTERN,
                     )
                 )
         matches.sort(key=lambda m: m.start)

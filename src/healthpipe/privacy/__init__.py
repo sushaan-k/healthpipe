@@ -8,10 +8,6 @@ from healthpipe.privacy.differential import (
     private_stats,
 )
 from healthpipe.privacy.k_anonymity import KAnonymityChecker, LDiversityChecker
-from healthpipe.privacy.reidentification_risk import (
-    ReidentificationRisk,
-    RiskScoreReport,
-)
 
 __all__ = [
     "DPResult",
@@ -20,7 +16,5 @@ __all__ = [
     "LDiversityChecker",
     "LaplaceMechanism",
     "PrivacyBudget",
-    "ReidentificationRisk",
-    "RiskScoreReport",
     "private_stats",
 ]
