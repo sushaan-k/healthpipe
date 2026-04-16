@@ -71,7 +71,14 @@ from healthpipe.ingest.schema import (
 )
 
 # --- Pipeline -----------------------------------------------------------------
-from healthpipe.pipeline import Pipeline, PipelineConfig, PipelineResult, ingest
+from healthpipe.pipeline import (
+    DryRunFinding,
+    DryRunReport,
+    Pipeline,
+    PipelineConfig,
+    PipelineResult,
+    ingest,
+)
 
 # --- Privacy ------------------------------------------------------------------
 from healthpipe.privacy.budget import PrivacyBudget
@@ -85,6 +92,10 @@ from healthpipe.privacy.differential import (
     private_stats,
 )
 from healthpipe.privacy.k_anonymity import KAnonymityChecker, LDiversityChecker
+from healthpipe.privacy.reidentification_risk import (
+    ReidentificationRisk,
+    RiskScoreReport,
+)
 
 # --- Synthetic data -----------------------------------------------------------
 from healthpipe.synthetic.generator import SyntheticGenerator, synthesize
@@ -106,6 +117,8 @@ __all__ = [
     "DateShiftError",
     "DeidentificationError",
     "DeidentifiedDataset",
+    "DryRunFinding",
+    "DryRunReport",
     "FHIRAuth",
     "FHIRSource",
     "FHIRValidationError",
@@ -132,9 +145,11 @@ __all__ = [
     "PipelineResult",
     "PrivacyBudget",
     "PrivacyError",
+    "ReidentificationRisk",
     "ReidentificationRiskError",
     "ReidentificationValidator",
     "ResourceType",
+    "RiskScoreReport",
     "SafeHarborConfig",
     "SafeHarborEngine",
     "SyntheticDataError",

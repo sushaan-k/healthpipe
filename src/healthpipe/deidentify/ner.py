@@ -52,6 +52,7 @@ class NEREntity:
     start: int
     end: int
     confidence: float
+    detection_method: str = "ner"
 
 
 @dataclass
@@ -131,6 +132,7 @@ class ClinicalNER:
                     start=ent.start_char,
                     end=ent.end_char,
                     confidence=0.85,
+                    detection_method="ner",
                 )
             )
         entities.sort(key=lambda e: e.start)
@@ -158,6 +160,7 @@ class ClinicalNER:
                         start=start,
                         end=start + len(name_text),
                         confidence=0.70,
+                        detection_method="context",
                     )
                 )
 
@@ -172,6 +175,7 @@ class ClinicalNER:
                     start=m.start(1),
                     end=m.end(1),
                     confidence=0.75,
+                    detection_method="context",
                 )
             )
 

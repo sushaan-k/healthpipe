@@ -156,6 +156,7 @@ class SafeHarborEngine:
     ) -> tuple[dict[str, Any], list[AuditEntry]]:
         """Apply all de-identification layers to a single record."""
         entries: list[AuditEntry] = []
+        original_key_order = list(record.data.keys())
         data = record.data.copy()
 
         # Determine patient ID for consistent date shifting
@@ -178,6 +179,10 @@ class SafeHarborEngine:
         if self._llm_verifier:
             llm_entries = await self._apply_llm_verification(data, record.id)
             entries.extend(llm_entries)
+
+        # Preserve original field ordering so consumers see the same
+        # key sequence in the de-identified output as in the input.
+        data = self._restore_key_order(data, original_key_order)
 
         return data, entries
 
@@ -346,6 +351,26 @@ class SafeHarborEngine:
         if isinstance(obj, list):
             return [SafeHarborEngine._walk_strings(item, transform) for item in obj]
         return obj
+
+    @staticmethod
+    def _restore_key_order(
+        data: dict[str, Any], original_keys: list[str]
+    ) -> dict[str, Any]:
+        """Re-order *data* so its top-level keys match *original_keys*.
+
+        Keys present in *data* but absent from *original_keys* are
+        appended at the end.  Nested dicts are **not** reordered because
+        inner structures are already handled by the walk helpers.
+        """
+        ordered: dict[str, Any] = {}
+        for key in original_keys:
+            if key in data:
+                ordered[key] = data[key]
+        # Append any keys that were added during processing
+        for key in data:
+            if key not in ordered:
+                ordered[key] = data[key]
+        return ordered
 
     @staticmethod
     def _collect_strings(obj: Any) -> list[str]:
