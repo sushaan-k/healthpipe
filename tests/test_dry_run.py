@@ -222,6 +222,8 @@ class TestDryRun:
         assert report.high_risk_records(min_findings=2) == [("b", 2), ("c", 2)]
         assert report.high_risk_records(min_findings=3) == []
         assert DryRunReport().high_risk_records() == []
+        with pytest.raises(ValueError, match="min_findings must be at least 1"):
+            report.high_risk_records(min_findings=0)
 
 
 class TestCollectStringsWithPaths:
