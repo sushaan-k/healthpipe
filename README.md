@@ -1,9 +1,11 @@
 # healthpipe
 
-[![CI](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![CI](https://github.com/sushaan-k/healthpipe/actions/workflows/ci.yml/badge.svg)](https://github.com/sushaan-k/healthpipe/actions)
+[![PyPI](https://img.shields.io/pypi/v/healthpipe.svg)](https://pypi.org/project/healthpipe/)
+[![PyPI Downloads](https://img.shields.io/pypi/dm/healthpipe.svg)](https://pypi.org/project/healthpipe/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![HIPAA Safe Harbor](https://img.shields.io/badge/HIPAA-Safe%20Harbor-blue.svg)](https://www.hhs.gov/hipaa/for-professionals/privacy/special-topics/de-identification/index.html)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 **Privacy-preserving clinical data pipeline with HIPAA-compliant de-identification, differential privacy, and synthetic data generation.**
 
@@ -44,13 +46,13 @@ pip install healthpipe
 
 ```python
 import asyncio
-import healthpipe as hp
+from healthpipe import ingest, FHIRSource, CSVSource, HL7v2Source
 
 async def main():
-    dataset = await hp.ingest([
-        hp.FHIRSource(url="https://fhir.hospital.org/R4"),
-        hp.CSVSource(path="./patient_data.csv", mapping="auto"),
-        hp.HL7v2Source(path="./hl7_messages/*.hl7"),
+    dataset = await ingest([
+        FHIRSource(url="https://fhir.hospital.org/R4"),
+        CSVSource(path="./patient_data.csv", mapping="auto"),
+        HL7v2Source(path="./hl7_messages/*.hl7"),
     ])
 
     print(dataset.patients.count())
@@ -63,12 +65,12 @@ asyncio.run(main())
 
 ```python
 import asyncio
-import healthpipe as hp
+from healthpipe import deidentify
 
 async def main():
     # ... (ingest dataset as above) ...
 
-    deidentified = await hp.deidentify(
+    deidentified = await deidentify(
         dataset,
         method="safe_harbor",
         date_shift=True,
@@ -89,13 +91,15 @@ asyncio.run(main())
 ### Differentially private statistics
 
 ```python
-stats = hp.private_stats(
+from healthpipe import private_stats, Count, Mean, Histogram
+
+stats = private_stats(
     deidentified,
     epsilon=1.0,
     queries=[
-        hp.Count(field="patient", group_by="diagnosis"),
-        hp.Mean(field="lab_results.glucose", group_by="age_group"),
-        hp.Histogram(field="medications", bins=20),
+        Count(field="patient", group_by="diagnosis"),
+        Mean(field="lab_results.glucose", group_by="age_group"),
+        Histogram(field="medications", bins=20),
     ],
 )
 print(f"Privacy budget remaining: {stats.budget_remaining}")
@@ -106,19 +110,19 @@ print(stats.results["count:patient|group_by:diagnosis"])
 
 ```python
 import asyncio
-import healthpipe as hp
+from healthpipe import synthesize, evaluate_utility
 
 async def main():
     # ... (de-identify dataset as above) ...
 
-    synthetic = await hp.synthesize(
+    synthetic = await synthesize(
         deidentified,
         n_patients=10_000,
         method="gaussian_copula",
         validate=True,
     )
 
-    utility = hp.evaluate_utility(synthetic, deidentified)
+    utility = evaluate_utility(synthetic, deidentified)
     print(f"Statistical fidelity: {utility.fidelity:.2%}")
     print(f"Re-identification risk: {utility.reidentification_risk:.6f}")
 
@@ -156,6 +160,15 @@ graph TD
     end
 
     A1 & A2 & A3 & A4 --> B
+
+    style A fill:#e1f5ff,stroke:#0288d1
+    style B fill:#f3e5f5,stroke:#7b1fa2
+    style C fill:#e0f2f1,stroke:#00897b
+    style D fill:#fce4ec,stroke:#c2185b
+    style E fill:#f1f8e9,stroke:#689f38
+    style F fill:#fff3e0,stroke:#f57c00
+    style G fill:#ede7f6,stroke:#512da8
+    style H fill:#e8f5e9,stroke:#2e7d32
 ```
 
 ### De-identification: Four Layers
@@ -169,14 +182,30 @@ graph TD
 
 ### HIPAA Safe Harbor Coverage
 
-| HIPAA Requirement | healthpipe Feature |
-|---|---|
-| Safe Harbor (18 identifiers) | Multi-layer de-identification engine |
-| Minimum Necessary | Configurable field access controls |
-| Audit Controls | Comprehensive JSON audit logging |
-| Data Integrity | SHA-256 checksums on all transformations |
-| Transmission Security | TLS enforcement on all data sources |
-| Breach Notification | Re-identification risk scoring |
+The following table details coverage of the 18 HIPAA Safe Harbor identifiers:
+
+| Identifier | Detection Method | Automatic | Notes |
+|---|---|---|---|
+| Names | NER + Pattern | ✓ | All patient, provider, contact names |
+| Geographic units < 20k population | Pattern | ✓ | ZIP code + location matching |
+| Dates (except year) | Date Shift | ✓ | All dates shifted uniformly per record |
+| Phone numbers | Pattern | ✓ | Regex + NER validation |
+| Fax numbers | Pattern | ✓ | Regex + NER validation |
+| Email addresses | Pattern | ✓ | RFC 5322 regex + NER |
+| SSN | Pattern | ✓ | XXX-XX-XXXX format |
+| Medical record numbers | Pattern + NER | ✓ | MRN-specific regex + context |
+| Health plan numbers | Pattern | ✓ | Common format detection |
+| Account numbers | Pattern | ✓ | Numeric pattern matching |
+| License/vehicle plate | Pattern | ⚠ | Manual review recommended |
+| IP addresses | Pattern | ✓ | IPv4 + IPv6 detection |
+| URLs | Pattern | ✓ | Full URL extraction |
+| Biometric identifiers | NER + LLM | ⚠ | Requires LLM verification pass |
+| Full-face images | Manual | — | Requires manual redaction |
+| Unique identifying codes | Context | ⚠ | May require domain knowledge |
+| Implant serial numbers | Context | ⚠ | Clinical NER context-dependent |
+| Generic identifiers | LLM | ⚠ | Requires verification pass |
+
+✓ = Fully automated | ⚠ = Requires verification or domain knowledge | — = Requires manual handling
 
 ## Installation
 
