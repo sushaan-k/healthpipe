@@ -70,6 +70,17 @@ asyncio.run(main())
 
 Use dry-run to see what would be detected without modifying data:
 
+```bash
+# Start from a normalized ClinicalDataset JSON produced by `healthpipe ingest`
+healthpipe scan dataset.json --format summary
+
+# CI-friendly gate: write a PHI-safe Markdown report and fail if PHI is present
+healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
+```
+
+CLI scan reports hash raw detected values unless `--include-values` is passed.
+Keep raw-value reports out of shared logs and ticketing systems.
+
 ```python
 import asyncio
 import healthpipe as hp

@@ -172,6 +172,92 @@ def deidentify(
 @main.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["summary", "json", "markdown"]),
+    default="summary",
+    help="Report format.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Write report to this path instead of stdout.",
+)
+@click.option(
+    "--include-values",
+    is_flag=True,
+    help="Include raw detected PHI values in the report. Defaults to hashes only.",
+)
+@click.option(
+    "--fail-on-phi",
+    is_flag=True,
+    help="Exit with status 2 when any PHI is detected.",
+)
+@click.option(
+    "--max-findings",
+    type=click.IntRange(min=0),
+    default=25,
+    show_default=True,
+    help="Maximum findings to show in Markdown reports.",
+)
+@click.option(
+    "--high-risk-min-findings",
+    type=click.IntRange(min=1),
+    default=2,
+    show_default=True,
+    help="Minimum findings for a record to be flagged as high-risk.",
+)
+def scan(
+    input_path: str,
+    fmt: str,
+    output: str | None,
+    include_values: bool,
+    fail_on_phi: bool,
+    max_findings: int,
+    high_risk_min_findings: int,
+) -> None:
+    """Dry-run scan a ClinicalDataset JSON file for PHI."""
+    from healthpipe.ingest.schema import ClinicalDataset
+    from healthpipe.pipeline import Pipeline
+
+    raw = Path(input_path).read_text(encoding="utf-8")
+    dataset = ClinicalDataset.model_validate_json(raw)
+    report = Pipeline().scan_dataset(dataset)
+
+    if fmt == "summary":
+        rendered = _format_scan_summary(
+            report,
+            high_risk_min_findings=high_risk_min_findings,
+        )
+    elif fmt == "json":
+        rendered = json.dumps(
+            report.to_safe_dict(include_values=include_values),
+            indent=2,
+        )
+    else:
+        rendered = report.to_markdown(
+            include_values=include_values,
+            max_findings=max_findings,
+            high_risk_min_findings=high_risk_min_findings,
+        )
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered, encoding="utf-8")
+        click.echo(f"PHI scan report saved to {out_path}")
+    else:
+        click.echo(rendered)
+
+    if fail_on_phi and report.total_phi_found > 0:
+        sys.exit(2)
+
+
+@main.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option(
     "--output",
     "-o",
     type=click.Path(),
@@ -262,6 +348,38 @@ def audit(audit_path: str, fmt: str) -> None:
         reporter = ComplianceReporter()
         report = reporter.generate(audit_log=log)
         click.echo(ComplianceReporter.to_markdown(report))
+
+
+def _format_scan_summary(
+    report: object,
+    *,
+    high_risk_min_findings: int,
+) -> str:
+    """Render a concise dry-run scan summary for terminal output."""
+    from healthpipe.pipeline import DryRunReport
+
+    if not isinstance(report, DryRunReport):
+        raise TypeError("report must be a DryRunReport")
+
+    lines = [
+        "PHI Dry-Run Scan",
+        f"  Records scanned: {report.total_records_scanned}",
+        f"  PHI findings: {report.total_phi_found}",
+        f"  Categories: {', '.join(report.categories_found) or 'None'}",
+    ]
+
+    if report.findings_by_category:
+        lines.append("  Findings by category:")
+        for category, count in sorted(report.findings_by_category.items()):
+            lines.append(f"    {category}: {count}")
+
+    high_risk = report.high_risk_records(min_findings=high_risk_min_findings)
+    if high_risk:
+        lines.append(f"  High-risk records (>= {high_risk_min_findings} finding(s)):")
+        for record_id, count in high_risk:
+            lines.append(f"    {record_id}: {count}")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

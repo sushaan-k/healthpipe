@@ -258,6 +258,120 @@ class TestCLIDeidentify:
         assert audit_path.exists()
 
 
+class TestCLIScan:
+    def test_scan_summary_reports_phi_breakdown(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="record-1",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "telecom": [
+                            {"system": "phone", "value": "555-123-4567"},
+                        ],
+                        "note": "Contact patient@example.org",
+                    },
+                    source_format="TEST",
+                )
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["scan", str(input_path)])
+
+        assert result.exit_code == 0
+        assert "PHI Dry-Run Scan" in result.output
+        assert "Records scanned: 1" in result.output
+        assert "PHI findings:" in result.output
+        assert "EMAIL" in result.output
+
+    def test_scan_json_hashes_original_values_by_default(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="record-1",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "identifier": [{"value": "123-45-6789"}],
+                    },
+                    source_format="TEST",
+                )
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["scan", str(input_path), "--format", "json"])
+
+        assert result.exit_code == 0
+        assert "123-45-6789" not in result.output
+        parsed = json.loads(result.output)
+        assert parsed["total_phi_found"] >= 1
+        assert "original_hash" in parsed["findings"][0]
+        assert "original" not in parsed["findings"][0]
+
+    def test_scan_can_write_markdown_and_fail_on_phi(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="record-1",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "note": "Call 555-123-4567",
+                    },
+                    source_format="TEST",
+                )
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        output_path = tmp_path / "scan.md"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "scan",
+                str(input_path),
+                "--format",
+                "markdown",
+                "-o",
+                str(output_path),
+                "--fail-on-phi",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert output_path.exists()
+        rendered = output_path.read_text()
+        assert "# healthpipe PHI Dry-Run Report" in rendered
+        assert "555-123-4567" not in rendered
+
+
 class TestCLISynthesize:
     def test_synthesize_command(self, tmp_path: Path) -> None:
         from healthpipe.deidentify.safe_harbor import DeidentifiedDataset

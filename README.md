@@ -246,12 +246,20 @@ healthpipe ingest ./patients.csv --format csv -o dataset.json
 # De-identify
 healthpipe deidentify dataset.json -o deidentified.json --audit-log audit.json
 
+# Preview PHI findings without modifying the dataset
+healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
+
 # Generate synthetic data
 healthpipe synthesize deidentified.json -o synthetic.json --n-patients 5000
 
 # View audit log
 healthpipe audit audit.json --format summary
 ```
+
+`healthpipe scan` hashes detected raw PHI values by default so the report can be
+used in CI and review workflows without turning the report itself into a PHI
+artifact. Use `--include-values` only in a controlled environment when a human
+needs to inspect the exact source values.
 
 ## Project Structure
 

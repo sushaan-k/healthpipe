@@ -8,6 +8,7 @@ top-level ``healthpipe`` API.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -48,6 +49,16 @@ class DryRunFinding(BaseModel):
     detection_method: str = ""
     confidence: float = 0.0
     field_path: str = ""
+
+    def to_safe_dict(self, *, include_values: bool = False) -> dict[str, Any]:
+        """Serialize a finding without leaking raw PHI by default."""
+        data = self.model_dump(mode="json")
+        if include_values:
+            return data
+
+        original = data.pop("original", "")
+        data["original_hash"] = _hash_phi_value(original)
+        return data
 
 
 class DryRunReport(BaseModel):
@@ -102,6 +113,91 @@ class DryRunReport(BaseModel):
         return [
             (record_id, count) for record_id, count in ranked if count >= min_findings
         ]
+
+    def to_safe_dict(self, *, include_values: bool = False) -> dict[str, Any]:
+        """Serialize the report with PHI-safe finding values by default."""
+        return {
+            "total_records_scanned": self.total_records_scanned,
+            "total_phi_found": self.total_phi_found,
+            "categories_found": self.categories_found,
+            "findings_by_category": self.findings_by_category,
+            "findings_by_record": self.findings_by_record,
+            "findings": [
+                finding.to_safe_dict(include_values=include_values)
+                for finding in self.findings
+            ],
+        }
+
+    def to_markdown(
+        self,
+        *,
+        include_values: bool = False,
+        max_findings: int = 25,
+        high_risk_min_findings: int = 2,
+    ) -> str:
+        """Render a PHI-safe Markdown report for human review."""
+        if max_findings < 0:
+            raise ValueError("max_findings must be non-negative")
+
+        value_header = "Original value" if include_values else "Original hash"
+        lines = [
+            "# healthpipe PHI Dry-Run Report",
+            "",
+            f"- Records scanned: {self.total_records_scanned}",
+            f"- PHI findings: {self.total_phi_found}",
+            f"- Categories: {', '.join(self.categories_found) or 'None'}",
+            "",
+        ]
+
+        if self.findings_by_category:
+            lines.extend(["## Findings by Category", ""])
+            for category, count in sorted(self.findings_by_category.items()):
+                lines.append(f"- {category}: {count}")
+            lines.append("")
+
+        high_risk = self.high_risk_records(min_findings=high_risk_min_findings)
+        if high_risk:
+            lines.extend(
+                [
+                    "## High-Risk Records",
+                    "",
+                    f"Records with at least {high_risk_min_findings} finding(s):",
+                    "",
+                ]
+            )
+            for record_id, count in high_risk:
+                lines.append(f"- {record_id}: {count} finding(s)")
+            lines.append("")
+
+        if self.findings:
+            shown = self.findings[:max_findings]
+            lines.extend(
+                [
+                    "## Findings",
+                    "",
+                    "| Record | Field | Category | Method | Confidence | "
+                    f"{value_header} |",
+                    "|---|---|---|---|---:|---|",
+                ]
+            )
+            for finding in shown:
+                safe = finding.to_safe_dict(include_values=include_values)
+                value = safe["original"] if include_values else safe["original_hash"]
+                lines.append(
+                    "| "
+                    f"{_markdown_cell(finding.record_id)} | "
+                    f"{_markdown_cell(finding.field_path or '(root)')} | "
+                    f"{_markdown_cell(finding.category)} | "
+                    f"{_markdown_cell(finding.detection_method)} | "
+                    f"{finding.confidence:.2f} | "
+                    f"{_markdown_cell(value)} |"
+                )
+
+            remaining = len(self.findings) - len(shown)
+            if remaining > 0:
+                lines.extend(["", f"_Omitted {remaining} additional finding(s)._"])
+
+        return "\n".join(lines)
 
 
 class PipelineConfig(BaseModel):
@@ -290,6 +386,10 @@ class Pipeline:
             categories_found=categories,
         )
 
+    def scan_dataset(self, dataset: ClinicalDataset) -> DryRunReport:
+        """Scan an already-loaded dataset for PHI without modifying it."""
+        return self._scan_for_phi(dataset)
+
     @staticmethod
     def _scan_record(
         record: ClinicalRecord,
@@ -442,6 +542,18 @@ def _collect_strings_with_paths(obj: Any, prefix: str = "") -> list[tuple[str, s
             child_path = f"{prefix}[{idx}]"
             pairs.extend(_collect_strings_with_paths(item, child_path))
     return pairs
+
+
+def _hash_phi_value(value: str) -> str:
+    """Return the short hash used in safe dry-run output."""
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def _markdown_cell(value: str) -> str:
+    """Escape a value for a simple Markdown table cell."""
+    return value.replace("|", "\\|").replace("\n", " ")
 
 
 async def ingest(
