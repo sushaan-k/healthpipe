@@ -249,6 +249,10 @@ healthpipe deidentify dataset.json -o deidentified.json --audit-log audit.json
 # Preview PHI findings without modifying the dataset
 healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
 
+# Create a safe baseline, then fail CI only on newly introduced PHI
+healthpipe scan dataset.json --write-baseline phi-baseline.json
+healthpipe scan dataset.json --baseline phi-baseline.json --only-new --fail-on-new
+
 # Generate synthetic data
 healthpipe synthesize deidentified.json -o synthetic.json --n-patients 5000
 
@@ -260,6 +264,11 @@ healthpipe audit audit.json --format summary
 used in CI and review workflows without turning the report itself into a PHI
 artifact. Use `--include-values` only in a controlled environment when a human
 needs to inspect the exact source values.
+
+For incremental source onboarding, `--write-baseline` stores stable
+fingerprints and hashes for known findings. Later scans can use `--baseline`,
+`--only-new`, and `--fail-on-new` to keep existing review items visible without
+blocking every build on already-triaged PHI.
 
 ## Project Structure
 

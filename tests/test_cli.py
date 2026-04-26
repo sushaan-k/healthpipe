@@ -371,6 +371,111 @@ class TestCLIScan:
         assert "# healthpipe PHI Dry-Run Report" in rendered
         assert "555-123-4567" not in rendered
 
+    def test_scan_writes_baseline_and_reports_only_new_phi(
+        self, tmp_path: Path
+    ) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        baseline_dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="record-1",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "email": "patient@example.org",
+                    },
+                    source_format="TEST",
+                )
+            ]
+        )
+        baseline_input = tmp_path / "baseline.json"
+        baseline_input.write_text(baseline_dataset.model_dump_json(indent=2))
+        baseline_path = tmp_path / "phi-baseline.json"
+        report_path = tmp_path / "scan.txt"
+
+        runner = CliRunner()
+        baseline_result = runner.invoke(
+            main,
+            [
+                "scan",
+                str(baseline_input),
+                "-o",
+                str(report_path),
+                "--write-baseline",
+                str(baseline_path),
+            ],
+        )
+
+        assert baseline_result.exit_code == 0
+        assert baseline_path.exists()
+        baseline_payload = json.loads(baseline_path.read_text())
+        assert "patient@example.org" not in baseline_path.read_text()
+        assert baseline_payload["findings"][0]["fingerprint"]
+
+        current_dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="record-1",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "email": "patient@example.org",
+                    },
+                    source_format="TEST",
+                ),
+                ClinicalRecord(
+                    id="record-2",
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "resourceType": "Patient",
+                        "ssn": "123-45-6789",
+                    },
+                    source_format="TEST",
+                ),
+            ]
+        )
+        current_input = tmp_path / "current.json"
+        current_input.write_text(current_dataset.model_dump_json(indent=2))
+
+        result = runner.invoke(
+            main,
+            [
+                "scan",
+                str(current_input),
+                "--format",
+                "json",
+                "--baseline",
+                str(baseline_path),
+                "--only-new",
+                "--fail-on-new",
+            ],
+        )
+
+        assert result.exit_code == 3
+        parsed = json.loads(result.output)
+        assert parsed["total_phi_found"] == 1
+        assert parsed["findings"][0]["category"] == "SSN"
+        assert "123-45-6789" not in result.output
+        assert parsed["baseline_comparison"]["new_count"] == 1
+        assert parsed["baseline_comparison"]["unchanged_count"] == 1
+
+    def test_scan_new_only_requires_baseline(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import ClinicalDataset
+
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(ClinicalDataset().model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["scan", str(input_path), "--only-new"])
+
+        assert result.exit_code != 0
+        assert "--only-new requires --baseline" in result.output
+
 
 class TestCLISynthesize:
     def test_synthesize_command(self, tmp_path: Path) -> None:

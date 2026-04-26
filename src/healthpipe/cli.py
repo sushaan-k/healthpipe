@@ -209,6 +209,28 @@ def deidentify(
     show_default=True,
     help="Minimum findings for a record to be flagged as high-risk.",
 )
+@click.option(
+    "--baseline",
+    type=click.Path(exists=True),
+    default=None,
+    help="Compare scan results against a PHI-safe baseline JSON file.",
+)
+@click.option(
+    "--write-baseline",
+    type=click.Path(),
+    default=None,
+    help="Write the current PHI-safe baseline JSON to this path.",
+)
+@click.option(
+    "--only-new",
+    is_flag=True,
+    help="Show only findings not present in --baseline.",
+)
+@click.option(
+    "--fail-on-new",
+    is_flag=True,
+    help="Exit with status 3 when --baseline comparison finds new PHI.",
+)
 def scan(
     input_path: str,
     fmt: str,
@@ -217,31 +239,58 @@ def scan(
     fail_on_phi: bool,
     max_findings: int,
     high_risk_min_findings: int,
+    baseline: str | None,
+    write_baseline: str | None,
+    only_new: bool,
+    fail_on_new: bool,
 ) -> None:
     """Dry-run scan a ClinicalDataset JSON file for PHI."""
     from healthpipe.ingest.schema import ClinicalDataset
     from healthpipe.pipeline import Pipeline
 
+    if only_new and baseline is None:
+        raise click.UsageError("--only-new requires --baseline")
+    if fail_on_new and baseline is None:
+        raise click.UsageError("--fail-on-new requires --baseline")
+
     raw = Path(input_path).read_text(encoding="utf-8")
     dataset = ClinicalDataset.model_validate_json(raw)
     report = Pipeline().scan_dataset(dataset)
+    comparison = None
+    display_report = report
+
+    if baseline:
+        baseline_payload = json.loads(Path(baseline).read_text(encoding="utf-8"))
+        comparison = report.compare_to_baseline(baseline_payload)
+        if only_new:
+            display_report = report.with_findings(comparison.new_findings)
 
     if fmt == "summary":
         rendered = _format_scan_summary(
-            report,
+            display_report,
             high_risk_min_findings=high_risk_min_findings,
+            baseline_comparison=comparison,
         )
     elif fmt == "json":
-        rendered = json.dumps(
-            report.to_safe_dict(include_values=include_values),
-            indent=2,
-        )
+        payload = display_report.to_safe_dict(include_values=include_values)
+        if comparison is not None:
+            payload["baseline_comparison"] = comparison.to_safe_dict(
+                include_values=include_values
+            )
+        rendered = json.dumps(payload, indent=2)
     else:
-        rendered = report.to_markdown(
+        rendered = display_report.to_markdown(
             include_values=include_values,
             max_findings=max_findings,
             high_risk_min_findings=high_risk_min_findings,
         )
+        if comparison is not None:
+            rendered = "\n\n".join(
+                [
+                    rendered,
+                    _format_scan_baseline_markdown(comparison),
+                ]
+            )
 
     if output:
         out_path = Path(output)
@@ -250,6 +299,18 @@ def scan(
         click.echo(f"PHI scan report saved to {out_path}")
     else:
         click.echo(rendered)
+
+    if write_baseline:
+        baseline_path = Path(write_baseline)
+        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path.write_text(
+            json.dumps(report.to_baseline_dict(), indent=2),
+            encoding="utf-8",
+        )
+        click.echo(f"PHI scan baseline saved to {baseline_path}", err=True)
+
+    if fail_on_new and comparison is not None and comparison.new_count > 0:
+        sys.exit(3)
 
     if fail_on_phi and report.total_phi_found > 0:
         sys.exit(2)
@@ -354,9 +415,10 @@ def _format_scan_summary(
     report: object,
     *,
     high_risk_min_findings: int,
+    baseline_comparison: object | None = None,
 ) -> str:
     """Render a concise dry-run scan summary for terminal output."""
-    from healthpipe.pipeline import DryRunReport
+    from healthpipe.pipeline import DryRunBaselineComparison, DryRunReport
 
     if not isinstance(report, DryRunReport):
         raise TypeError("report must be a DryRunReport")
@@ -379,7 +441,35 @@ def _format_scan_summary(
         for record_id, count in high_risk:
             lines.append(f"    {record_id}: {count}")
 
+    if baseline_comparison is not None:
+        if not isinstance(baseline_comparison, DryRunBaselineComparison):
+            raise TypeError("baseline_comparison must be a DryRunBaselineComparison")
+        lines.append("  Baseline comparison:")
+        lines.append(f"    New findings: {baseline_comparison.new_count}")
+        lines.append(f"    Unchanged findings: {baseline_comparison.unchanged_count}")
+        lines.append(f"    Resolved findings: {baseline_comparison.resolved_count}")
+
     return "\n".join(lines)
+
+
+def _format_scan_baseline_markdown(comparison: object) -> str:
+    """Render baseline comparison details for Markdown scan reports."""
+    from healthpipe.pipeline import DryRunBaselineComparison
+
+    if not isinstance(comparison, DryRunBaselineComparison):
+        raise TypeError("comparison must be a DryRunBaselineComparison")
+
+    return "\n".join(
+        [
+            "## Baseline Comparison",
+            "",
+            f"- Baseline findings: {comparison.baseline_count}",
+            f"- Current findings: {comparison.current_count}",
+            f"- New findings: {comparison.new_count}",
+            f"- Unchanged findings: {comparison.unchanged_count}",
+            f"- Resolved findings: {comparison.resolved_count}",
+        ]
+    )
 
 
 if __name__ == "__main__":

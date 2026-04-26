@@ -225,6 +225,82 @@ class TestDryRun:
         with pytest.raises(ValueError, match="min_findings must be at least 1"):
             report.high_risk_records(min_findings=0)
 
+    def test_dry_run_baseline_is_phi_safe_and_stable(self) -> None:
+        finding = DryRunFinding(
+            record_id="record-1",
+            field_path="patient.email",
+            category="EMAIL",
+            original="Patient@Example.Org",
+            replacement="[EMAIL]",
+            detection_method="pattern",
+            confidence=0.95,
+        )
+        same_value_different_case = DryRunFinding(
+            record_id="record-1",
+            field_path="patient.email",
+            category="EMAIL",
+            original=" patient@example.org ",
+        )
+
+        report = DryRunReport(findings=[finding], total_records_scanned=1)
+        baseline = report.to_baseline_dict()
+
+        assert finding.fingerprint() == same_value_different_case.fingerprint()
+        assert "Patient@Example.Org" not in str(baseline)
+        assert baseline["findings"][0]["fingerprint"] == finding.fingerprint()
+        assert "original_hash" in baseline["findings"][0]
+        assert "original" not in baseline["findings"][0]
+
+    def test_dry_run_compares_against_baseline(self) -> None:
+        baseline_report = DryRunReport(
+            findings=[
+                DryRunFinding(
+                    record_id="record-1",
+                    field_path="patient.email",
+                    category="EMAIL",
+                    original="patient@example.org",
+                ),
+                DryRunFinding(
+                    record_id="record-2",
+                    field_path="patient.phone",
+                    category="PHONE",
+                    original="555-123-4567",
+                ),
+            ],
+            total_records_scanned=2,
+        )
+        current_report = DryRunReport(
+            findings=[
+                DryRunFinding(
+                    record_id="record-1",
+                    field_path="patient.email",
+                    category="EMAIL",
+                    original="patient@example.org",
+                ),
+                DryRunFinding(
+                    record_id="record-3",
+                    field_path="patient.ssn",
+                    category="SSN",
+                    original="123-45-6789",
+                ),
+            ],
+            total_records_scanned=3,
+        )
+
+        comparison = current_report.compare_to_baseline(
+            baseline_report.to_baseline_dict()
+        )
+
+        assert comparison.baseline_count == 2
+        assert comparison.current_count == 2
+        assert comparison.new_count == 1
+        assert comparison.resolved_count == 1
+        assert comparison.unchanged_count == 1
+        assert comparison.new_findings[0].category == "SSN"
+        assert (
+            current_report.with_findings(comparison.new_findings).total_phi_found == 1
+        )
+
 
 class TestCollectStringsWithPaths:
     def test_flat_dict(self) -> None:

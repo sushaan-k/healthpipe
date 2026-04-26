@@ -76,10 +76,20 @@ healthpipe scan dataset.json --format summary
 
 # CI-friendly gate: write a PHI-safe Markdown report and fail if PHI is present
 healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
+
+# Baseline known findings and block only newly introduced PHI
+healthpipe scan dataset.json --write-baseline phi-baseline.json
+healthpipe scan dataset.json --baseline phi-baseline.json --only-new --fail-on-new
 ```
 
 CLI scan reports hash raw detected values unless `--include-values` is passed.
 Keep raw-value reports out of shared logs and ticketing systems.
+
+Baselines are also PHI-safe by default: they store stable finding fingerprints,
+record/field metadata, categories, and value hashes rather than raw values.
+Use them when onboarding a messy source gradually, or when CI should catch new
+PHI regressions without repeatedly failing on findings that have already been
+triaged by a privacy reviewer.
 
 ```python
 import asyncio

@@ -9,7 +9,9 @@ top-level ``healthpipe`` API.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -53,12 +55,55 @@ class DryRunFinding(BaseModel):
     def to_safe_dict(self, *, include_values: bool = False) -> dict[str, Any]:
         """Serialize a finding without leaking raw PHI by default."""
         data = self.model_dump(mode="json")
+        data["fingerprint"] = self.fingerprint()
         if include_values:
             return data
 
         original = data.pop("original", "")
         data["original_hash"] = _hash_phi_value(original)
         return data
+
+    def original_hash(self) -> str:
+        """Return the PHI-safe hash used for this finding's raw value."""
+        return _hash_phi_value(self.original)
+
+    def fingerprint(self) -> str:
+        """Return a stable PHI-safe identifier for baseline comparisons."""
+        return _fingerprint_from_parts(
+            record_id=self.record_id,
+            field_path=self.field_path,
+            category=self.category,
+            original_hash=self.original_hash(),
+        )
+
+
+class DryRunBaselineComparison(BaseModel):
+    """Comparison between the current dry-run report and a stored baseline."""
+
+    baseline_count: int = 0
+    current_count: int = 0
+    new_count: int = 0
+    resolved_count: int = 0
+    unchanged_count: int = 0
+    new_findings: list[DryRunFinding] = Field(default_factory=list)
+    resolved_fingerprints: list[str] = Field(default_factory=list)
+    unchanged_fingerprints: list[str] = Field(default_factory=list)
+
+    def to_safe_dict(self, *, include_values: bool = False) -> dict[str, Any]:
+        """Serialize baseline comparison details without raw PHI by default."""
+        return {
+            "baseline_count": self.baseline_count,
+            "current_count": self.current_count,
+            "new_count": self.new_count,
+            "resolved_count": self.resolved_count,
+            "unchanged_count": self.unchanged_count,
+            "new_findings": [
+                finding.to_safe_dict(include_values=include_values)
+                for finding in self.new_findings
+            ],
+            "resolved_fingerprints": self.resolved_fingerprints,
+            "unchanged_fingerprints": self.unchanged_fingerprints,
+        }
 
 
 class DryRunReport(BaseModel):
@@ -127,6 +172,57 @@ class DryRunReport(BaseModel):
                 for finding in self.findings
             ],
         }
+
+    def to_baseline_dict(self) -> dict[str, Any]:
+        """Serialize a PHI-safe baseline suitable for future comparisons."""
+        return {
+            "schema_version": 1,
+            "total_records_scanned": self.total_records_scanned,
+            "total_phi_found": self.total_phi_found,
+            "categories_found": self.categories_found,
+            "findings_by_category": self.findings_by_category,
+            "findings": [
+                finding.to_safe_dict(include_values=False) for finding in self.findings
+            ],
+        }
+
+    def compare_to_baseline(
+        self,
+        baseline: Mapping[str, Any],
+    ) -> DryRunBaselineComparison:
+        """Compare this report to a stored PHI-safe baseline."""
+        baseline_fingerprints = _extract_baseline_fingerprints(baseline)
+        current_by_fingerprint = {
+            finding.fingerprint(): finding for finding in self.findings
+        }
+        current_fingerprints = set(current_by_fingerprint)
+
+        new_fingerprints = sorted(current_fingerprints - baseline_fingerprints)
+        resolved_fingerprints = sorted(baseline_fingerprints - current_fingerprints)
+        unchanged_fingerprints = sorted(current_fingerprints & baseline_fingerprints)
+
+        return DryRunBaselineComparison(
+            baseline_count=len(baseline_fingerprints),
+            current_count=len(current_fingerprints),
+            new_count=len(new_fingerprints),
+            resolved_count=len(resolved_fingerprints),
+            unchanged_count=len(unchanged_fingerprints),
+            new_findings=[
+                current_by_fingerprint[fingerprint] for fingerprint in new_fingerprints
+            ],
+            resolved_fingerprints=resolved_fingerprints,
+            unchanged_fingerprints=unchanged_fingerprints,
+        )
+
+    def with_findings(self, findings: list[DryRunFinding]) -> DryRunReport:
+        """Return a new report with the same scan scope and a different finding set."""
+        categories = sorted({finding.category for finding in findings})
+        return DryRunReport(
+            findings=findings,
+            total_records_scanned=self.total_records_scanned,
+            total_phi_found=len(findings),
+            categories_found=categories,
+        )
 
     def to_markdown(
         self,
@@ -548,7 +644,67 @@ def _hash_phi_value(value: str) -> str:
     """Return the short hash used in safe dry-run output."""
     if not value:
         return ""
-    return hashlib.sha256(value.encode()).hexdigest()[:16]
+    return hashlib.sha256(_normalize_phi_value(value).encode()).hexdigest()[:16]
+
+
+def _normalize_phi_value(value: str) -> str:
+    """Normalize raw PHI before hashing or fingerprinting."""
+    return " ".join(value.strip().lower().split())
+
+
+def _fingerprint_from_parts(
+    *,
+    record_id: str,
+    field_path: str,
+    category: str,
+    original_hash: str,
+) -> str:
+    """Build the stable PHI-safe fingerprint used by scan baselines."""
+    payload = {
+        "category": category,
+        "field_path": field_path,
+        "original_hash": original_hash,
+        "record_id": record_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()[:24]
+
+
+def _extract_baseline_fingerprints(baseline: Mapping[str, Any]) -> set[str]:
+    """Read fingerprints from a scan baseline or legacy safe report JSON."""
+    raw_findings = baseline.get("findings", [])
+    if not isinstance(raw_findings, list):
+        raise ValueError("baseline findings must be a list")
+
+    fingerprints: set[str] = set()
+    for index, raw_finding in enumerate(raw_findings):
+        if not isinstance(raw_finding, Mapping):
+            raise ValueError(f"baseline finding {index} must be an object")
+
+        raw_fingerprint = raw_finding.get("fingerprint")
+        if isinstance(raw_fingerprint, str) and raw_fingerprint:
+            fingerprints.add(raw_fingerprint)
+            continue
+
+        original_hash = raw_finding.get("original_hash")
+        if not isinstance(original_hash, str) or not original_hash:
+            original = raw_finding.get("original")
+            if isinstance(original, str):
+                original_hash = _hash_phi_value(original)
+            else:
+                raise ValueError(
+                    f"baseline finding {index} is missing fingerprint/original_hash"
+                )
+
+        fingerprints.add(
+            _fingerprint_from_parts(
+                record_id=str(raw_finding.get("record_id", "")),
+                field_path=str(raw_finding.get("field_path", "")),
+                category=str(raw_finding.get("category", "")),
+                original_hash=original_hash,
+            )
+        )
+    return fingerprints
 
 
 def _markdown_cell(value: str) -> str:

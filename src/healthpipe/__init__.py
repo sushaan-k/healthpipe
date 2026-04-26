@@ -72,6 +72,7 @@ from healthpipe.ingest.schema import (
 
 # --- Pipeline -----------------------------------------------------------------
 from healthpipe.pipeline import (
+    DryRunBaselineComparison,
     DryRunFinding,
     DryRunReport,
     Pipeline,
@@ -117,6 +118,7 @@ __all__ = [
     "DateShiftError",
     "DeidentificationError",
     "DeidentifiedDataset",
+    "DryRunBaselineComparison",
     "DryRunFinding",
     "DryRunReport",
     "FHIRAuth",
