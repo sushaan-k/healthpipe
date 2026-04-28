@@ -95,6 +95,35 @@ class TestReidentificationRisk:
         scorer = ReidentificationRisk(quasi_identifiers=["age", "gender"])
         report = scorer.score(records)
         assert report.risk_level == "low"
+        assert report.total_records == 1
+        assert report.records_scored == 0
+
+    def test_nested_quasi_identifier_paths(self) -> None:
+        records = [
+            _make_record(
+                patient={"birthYear": 1970},
+                address=[{"postalCode": "02139"}],
+            ),
+            _make_record(
+                patient={"birthYear": 1970},
+                address=[{"postalCode": "02139"}],
+            ),
+            _make_record(
+                patient={"birthYear": 1988},
+                address=[{"postalCode": "94110"}],
+            ),
+        ]
+        scorer = ReidentificationRisk(
+            quasi_identifiers=["patient.birthYear", "address.postalCode"]
+        )
+        report = scorer.score(records)
+
+        assert report.total_records == 3
+        assert report.records_scored == 3
+        assert report.equivalence_class_count == 2
+        assert report.min_class_size == 1
+        assert report.quasi_identifiers == ["patient.birthYear", "address.postalCode"]
+        assert report.risk_level == "high"
 
     def test_requires_at_least_one_qi(self) -> None:
         with pytest.raises(ValueError, match="At least one quasi-identifier"):

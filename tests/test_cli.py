@@ -555,6 +555,141 @@ class TestCLISynthesize:
         assert result.exit_code == 0
 
 
+class TestCLIRisk:
+    def test_risk_summary_scores_nested_quasi_identifiers(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "patient": {"birthYear": 1970},
+                        "address": [{"postalCode": "02139"}],
+                    },
+                    source_format="TEST",
+                ),
+                ClinicalRecord(
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "patient": {"birthYear": 1970},
+                        "address": [{"postalCode": "02139"}],
+                    },
+                    source_format="TEST",
+                ),
+                ClinicalRecord(
+                    resource_type=ResourceType.PATIENT,
+                    data={
+                        "patient": {"birthYear": 1988},
+                        "address": [{"postalCode": "94110"}],
+                    },
+                    source_format="TEST",
+                ),
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "risk",
+                str(input_path),
+                "--quasi-id",
+                "patient.birthYear",
+                "--quasi-id",
+                "address.postalCode",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Re-Identification Risk" in result.output
+        assert "Risk level: high" in result.output
+        assert "Records scored: 3/3" in result.output
+        assert "Equivalence classes: 2" in result.output
+
+    def test_risk_json_loads_deidentified_dataset_and_fail_gate(
+        self, tmp_path: Path
+    ) -> None:
+        from healthpipe.deidentify.safe_harbor import DeidentifiedDataset
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        deidentified = DeidentifiedDataset(
+            dataset=ClinicalDataset(
+                records=[
+                    ClinicalRecord(
+                        resource_type=ResourceType.PATIENT,
+                        data={"age": "30", "gender": "F"},
+                        source_format="TEST",
+                    ),
+                    ClinicalRecord(
+                        resource_type=ResourceType.PATIENT,
+                        data={"age": "40", "gender": "M"},
+                        source_format="TEST",
+                    ),
+                ]
+            )
+        )
+        input_path = tmp_path / "deidentified.json"
+        input_path.write_text(deidentified.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "risk",
+                str(input_path),
+                "--quasi-id",
+                "age",
+                "--quasi-id",
+                "gender",
+                "--format",
+                "json",
+                "--fail-on",
+                "high",
+            ],
+        )
+
+        assert result.exit_code == 4
+        parsed = json.loads(result.output)
+        assert parsed["risk_level"] == "high"
+        assert parsed["records_scored"] == 2
+        assert parsed["quasi_identifiers"] == ["age", "gender"]
+
+    def test_risk_rejects_inverted_thresholds(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import ClinicalDataset
+
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(ClinicalDataset().model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "risk",
+                str(input_path),
+                "--quasi-id",
+                "age",
+                "--medium-risk-threshold",
+                "0.4",
+                "--high-risk-threshold",
+                "0.2",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "--medium-risk-threshold" in result.output
+
+
 class TestCLIAudit:
     def test_audit_summary(self, tmp_path: Path) -> None:
         from healthpipe.audit.logger import AuditEntry, AuditLog

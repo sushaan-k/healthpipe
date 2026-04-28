@@ -17,11 +17,12 @@ Key metrics:
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from healthpipe.ingest.schema import ClinicalRecord
 
@@ -43,6 +44,10 @@ class RiskScoreReport(BaseModel):
         median_class_size: Median equivalence class size.
         risk_level: Human-readable risk label (``"low"``, ``"medium"``,
             or ``"high"``).
+        total_records: Total records passed to the scorer.
+        records_scored: Records with at least one configured quasi-identifier.
+        equivalence_class_count: Number of distinct quasi-identifier groups.
+        quasi_identifiers: Quasi-identifier paths used for scoring.
     """
 
     uniqueness_ratio: float = 0.0
@@ -52,6 +57,10 @@ class RiskScoreReport(BaseModel):
     min_class_size: int = 0
     median_class_size: float = 0.0
     risk_level: str = "low"
+    total_records: int = 0
+    records_scored: int = 0
+    equivalence_class_count: int = 0
+    quasi_identifiers: list[str] = Field(default_factory=list)
 
 
 class ReidentificationRisk:
@@ -86,12 +95,17 @@ class ReidentificationRisk:
         """Analyse *records* and return a ``RiskScoreReport``.
 
         Records whose ``data`` dict does not contain any of the configured
-        quasi-identifiers are silently skipped.
+        quasi-identifiers are silently skipped. Quasi-identifiers may be direct
+        keys (``"age"``) or dotted paths into nested data
+        (``"address.postalCode"`` or ``"address.0.postalCode"``).
         """
         df = self._records_to_df(records)
         if df.empty:
             logger.warning("No quasi-identifier data found; returning zero-risk report")
-            return RiskScoreReport()
+            return RiskScoreReport(
+                total_records=len(records),
+                quasi_identifiers=self.quasi_identifiers,
+            )
 
         qi_cols = [c for c in self.quasi_identifiers if c in df.columns]
         if not qi_cols:
@@ -99,7 +113,11 @@ class ReidentificationRisk:
                 "None of the configured quasi-identifiers (%s) found in data",
                 self.quasi_identifiers,
             )
-            return RiskScoreReport()
+            return RiskScoreReport(
+                total_records=len(records),
+                records_scored=len(df),
+                quasi_identifiers=self.quasi_identifiers,
+            )
 
         group_sizes = df.groupby(qi_cols, dropna=False).size()
         n_records = len(df)
@@ -130,6 +148,10 @@ class ReidentificationRisk:
             min_class_size=min_size,
             median_class_size=round(median_size, 1),
             risk_level=risk_level,
+            total_records=len(records),
+            records_scored=n_records,
+            equivalence_class_count=n_classes,
+            quasi_identifiers=self.quasi_identifiers,
         )
 
         logger.info(
@@ -149,9 +171,57 @@ class ReidentificationRisk:
         for rec in records:
             row: dict[str, Any] = {}
             for qi in self.quasi_identifiers:
-                val = rec.data.get(qi)
+                val = _extract_quasi_identifier(rec.data, qi)
                 if val is not None:
-                    row[qi] = val
+                    row[qi] = _normalise_quasi_identifier_value(val)
             if row:
                 rows.append(row)
         return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def _extract_quasi_identifier(data: Any, path: str) -> Any:
+    """Extract a direct or dotted quasi-identifier value from record data."""
+    if not path:
+        return None
+    return _extract_path(data, path.split("."))
+
+
+def _extract_path(value: Any, parts: list[str]) -> Any:
+    """Recursively walk dictionaries and lists for a dotted field path."""
+    if not parts:
+        return value
+
+    head, *tail = parts
+    if isinstance(value, dict):
+        if head not in value:
+            return None
+        return _extract_path(value[head], tail)
+
+    if isinstance(value, list):
+        if head.isdigit():
+            index = int(head)
+            if index >= len(value):
+                return None
+            return _extract_path(value[index], tail)
+
+        collected: list[Any] = []
+        for item in value:
+            child = _extract_path(item, parts)
+            if child is None:
+                continue
+            if isinstance(child, list):
+                collected.extend(child)
+            else:
+                collected.append(child)
+        return collected or None
+
+    return None
+
+
+def _normalise_quasi_identifier_value(value: Any) -> Any:
+    """Convert nested quasi-identifier values into stable groupable values."""
+    if isinstance(value, list):
+        return tuple(_normalise_quasi_identifier_value(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return value

@@ -14,6 +14,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -371,6 +372,101 @@ def synthesize(
 
 
 @main.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option(
+    "--quasi-id",
+    "quasi_ids",
+    multiple=True,
+    required=True,
+    help="Quasi-identifier key or dotted path. Repeat for multiple fields.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["summary", "json", "markdown"]),
+    default="summary",
+    help="Report format.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Write report to this path instead of stdout.",
+)
+@click.option(
+    "--input-kind",
+    type=click.Choice(["auto", "dataset", "deidentified"]),
+    default="auto",
+    show_default=True,
+    help="Input JSON shape.",
+)
+@click.option(
+    "--medium-risk-threshold",
+    type=click.FloatRange(min=0.0, max=1.0),
+    default=0.05,
+    show_default=True,
+    help="Uniqueness ratio at or above which risk is medium.",
+)
+@click.option(
+    "--high-risk-threshold",
+    type=click.FloatRange(min=0.0, max=1.0),
+    default=0.20,
+    show_default=True,
+    help="Uniqueness ratio at or above which risk is high.",
+)
+@click.option(
+    "--fail-on",
+    type=click.Choice(["medium", "high"]),
+    default=None,
+    help="Exit with status 4 when risk is at least this level.",
+)
+def risk(
+    input_path: str,
+    quasi_ids: tuple[str, ...],
+    fmt: str,
+    output: str | None,
+    input_kind: str,
+    medium_risk_threshold: float,
+    high_risk_threshold: float,
+    fail_on: str | None,
+) -> None:
+    """Score re-identification risk for dataset JSON."""
+    from healthpipe.privacy.reidentification_risk import ReidentificationRisk
+
+    if medium_risk_threshold > high_risk_threshold:
+        raise click.UsageError(
+            "--medium-risk-threshold must be less than or equal to "
+            "--high-risk-threshold"
+        )
+
+    records = _load_records_for_risk(Path(input_path), input_kind=input_kind)
+    report = ReidentificationRisk(
+        quasi_identifiers=list(quasi_ids),
+        medium_risk_threshold=medium_risk_threshold,
+        high_risk_threshold=high_risk_threshold,
+    ).score(records)
+
+    if fmt == "json":
+        rendered = json.dumps(report.model_dump(mode="json"), indent=2)
+    elif fmt == "markdown":
+        rendered = _format_risk_markdown(report)
+    else:
+        rendered = _format_risk_summary(report)
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered, encoding="utf-8")
+        click.echo(f"Re-identification risk report saved to {out_path}")
+    else:
+        click.echo(rendered)
+
+    if fail_on and _risk_level_at_least(report.risk_level, fail_on):
+        sys.exit(4)
+
+
+@main.command()
 @click.argument("audit_path", type=click.Path(exists=True))
 @click.option(
     "--format",
@@ -470,6 +566,77 @@ def _format_scan_baseline_markdown(comparison: object) -> str:
             f"- Resolved findings: {comparison.resolved_count}",
         ]
     )
+
+
+def _load_records_for_risk(path: Path, *, input_kind: str) -> list[Any]:
+    """Load records from ClinicalDataset or DeidentifiedDataset JSON."""
+    from healthpipe.deidentify.safe_harbor import DeidentifiedDataset
+    from healthpipe.ingest.schema import ClinicalDataset
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        if input_kind == "deidentified" or (
+            input_kind == "auto" and isinstance(raw, dict) and "dataset" in raw
+        ):
+            return DeidentifiedDataset.model_validate(raw).records
+        return ClinicalDataset.model_validate(raw).records
+    except Exception as exc:
+        raise click.ClickException(f"Cannot parse dataset JSON: {exc}") from exc
+
+
+def _format_risk_summary(report: object) -> str:
+    """Render a concise re-identification risk summary for terminal output."""
+    from healthpipe.privacy.reidentification_risk import RiskScoreReport
+
+    if not isinstance(report, RiskScoreReport):
+        raise TypeError("report must be a RiskScoreReport")
+
+    return "\n".join(
+        [
+            "Re-Identification Risk",
+            f"  Risk level: {report.risk_level}",
+            f"  Records scored: {report.records_scored}/{report.total_records}",
+            f"  Quasi-identifiers: {', '.join(report.quasi_identifiers)}",
+            f"  Uniqueness ratio: {report.uniqueness_ratio:.2%}",
+            f"  Prosecutor risk: {report.prosecutor_risk:.2%}",
+            f"  Journalist risk: {report.journalist_risk:.2%}",
+            f"  Marketer risk: {report.marketer_risk:.2%}",
+            f"  Equivalence classes: {report.equivalence_class_count}",
+            f"  Minimum class size: {report.min_class_size}",
+            f"  Median class size: {report.median_class_size:.1f}",
+        ]
+    )
+
+
+def _format_risk_markdown(report: object) -> str:
+    """Render a Markdown re-identification risk report."""
+    from healthpipe.privacy.reidentification_risk import RiskScoreReport
+
+    if not isinstance(report, RiskScoreReport):
+        raise TypeError("report must be a RiskScoreReport")
+
+    return "\n".join(
+        [
+            "# healthpipe Re-Identification Risk Report",
+            "",
+            f"- Risk level: {report.risk_level}",
+            f"- Records scored: {report.records_scored}/{report.total_records}",
+            f"- Quasi-identifiers: {', '.join(report.quasi_identifiers)}",
+            f"- Uniqueness ratio: {report.uniqueness_ratio:.2%}",
+            f"- Prosecutor risk: {report.prosecutor_risk:.2%}",
+            f"- Journalist risk: {report.journalist_risk:.2%}",
+            f"- Marketer risk: {report.marketer_risk:.2%}",
+            f"- Equivalence classes: {report.equivalence_class_count}",
+            f"- Minimum class size: {report.min_class_size}",
+            f"- Median class size: {report.median_class_size:.1f}",
+        ]
+    )
+
+
+def _risk_level_at_least(actual: str, threshold: str) -> bool:
+    """Return True if actual risk is at least threshold risk."""
+    order = {"low": 0, "medium": 1, "high": 2}
+    return order[actual] >= order[threshold]
 
 
 if __name__ == "__main__":

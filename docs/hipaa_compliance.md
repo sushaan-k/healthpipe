@@ -91,6 +91,23 @@ Use them when onboarding a messy source gradually, or when CI should catch new
 PHI regressions without repeatedly failing on findings that have already been
 triaged by a privacy reviewer.
 
+After de-identification, use the re-identification risk gate to check whether
+quasi-identifier combinations remain too unique:
+
+```bash
+healthpipe risk deidentified.json \
+  --quasi-id age \
+  --quasi-id gender \
+  --quasi-id address.postalCode \
+  --format markdown \
+  -o risk-report.md \
+  --fail-on medium
+```
+
+The command accepts both `ClinicalDataset` and `DeidentifiedDataset` JSON. It
+reports prosecutor, journalist, marketer, and uniqueness risk, and it supports
+dotted paths into nested FHIR-like records.
+
 ```python
 import asyncio
 import healthpipe as hp

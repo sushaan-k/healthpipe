@@ -253,6 +253,9 @@ healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
 healthpipe scan dataset.json --write-baseline phi-baseline.json
 healthpipe scan dataset.json --baseline phi-baseline.json --only-new --fail-on-new
 
+# Score re-identification risk for de-identified output
+healthpipe risk deidentified.json --quasi-id age --quasi-id gender --fail-on medium
+
 # Generate synthetic data
 healthpipe synthesize deidentified.json -o synthetic.json --n-patients 5000
 
@@ -269,6 +272,12 @@ For incremental source onboarding, `--write-baseline` stores stable
 fingerprints and hashes for known findings. Later scans can use `--baseline`,
 `--only-new`, and `--fail-on-new` to keep existing review items visible without
 blocking every build on already-triaged PHI.
+
+`healthpipe risk` loads either a `ClinicalDataset` or a `DeidentifiedDataset`
+JSON file and estimates re-identification risk from quasi-identifier
+combinations. Quasi-identifiers can be top-level keys such as `age` or dotted
+paths such as `address.postalCode`; use `--format json` for CI artifacts and
+`--fail-on medium` or `--fail-on high` to make release gates explicit.
 
 ## Project Structure
 
