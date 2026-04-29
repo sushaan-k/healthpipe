@@ -320,6 +320,71 @@ def scan(
 @main.command()
 @click.argument("input_path", type=click.Path(exists=True))
 @click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["summary", "json", "markdown"]),
+    default="summary",
+    help="Report format.",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Write report to this path instead of stdout.",
+)
+@click.option(
+    "--fail-on",
+    type=click.Choice(["error", "warning"]),
+    default=None,
+    help="Exit with status 5 when findings reach this severity.",
+)
+@click.option(
+    "--max-findings",
+    type=click.IntRange(min=0),
+    default=50,
+    show_default=True,
+    help="Maximum findings to show in Markdown reports.",
+)
+def validate(
+    input_path: str,
+    fmt: str,
+    output: str | None,
+    fail_on: str | None,
+    max_findings: int,
+) -> None:
+    """Validate ClinicalDataset JSON structure and references."""
+    from healthpipe.ingest.schema import ClinicalDataset
+    from healthpipe.validation import DatasetValidator
+
+    raw = Path(input_path).read_text(encoding="utf-8")
+    dataset = ClinicalDataset.model_validate_json(raw)
+    report = DatasetValidator().validate(dataset)
+
+    if fmt == "json":
+        rendered = json.dumps(report.to_safe_dict(), indent=2)
+    elif fmt == "markdown":
+        rendered = report.to_markdown(max_findings=max_findings)
+    else:
+        rendered = _format_validation_summary(report)
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered, encoding="utf-8")
+        click.echo(f"Dataset validation report saved to {out_path}")
+    else:
+        click.echo(rendered)
+
+    if fail_on == "error" and report.error_count > 0:
+        sys.exit(5)
+    if fail_on == "warning" and (report.error_count > 0 or report.warning_count > 0):
+        sys.exit(5)
+
+
+@main.command()
+@click.argument("input_path", type=click.Path(exists=True))
+@click.option(
     "--output",
     "-o",
     type=click.Path(),
@@ -544,6 +609,35 @@ def _format_scan_summary(
         lines.append(f"    New findings: {baseline_comparison.new_count}")
         lines.append(f"    Unchanged findings: {baseline_comparison.unchanged_count}")
         lines.append(f"    Resolved findings: {baseline_comparison.resolved_count}")
+
+    return "\n".join(lines)
+
+
+def _format_validation_summary(report: object) -> str:
+    """Render a concise dataset validation summary for terminal output."""
+    from healthpipe.validation import DatasetValidationReport
+
+    if not isinstance(report, DatasetValidationReport):
+        raise TypeError("report must be a DatasetValidationReport")
+
+    lines = [
+        "Dataset Validation",
+        f"  Status: {'passed' if report.passed else 'failed'}",
+        f"  Records checked: {report.total_records}",
+        f"  Errors: {report.error_count}",
+        f"  Warnings: {report.warning_count}",
+    ]
+
+    if report.records_by_type:
+        lines.append("  Records by type:")
+        for resource_type, count in sorted(report.records_by_type.items()):
+            lines.append(f"    {resource_type}: {count}")
+
+    counts_by_code = report.finding_counts_by_code()
+    if counts_by_code:
+        lines.append("  Findings by code:")
+        for code, count in counts_by_code.items():
+            lines.append(f"    {code}: {count}")
 
     return "\n".join(lines)
 

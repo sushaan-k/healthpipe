@@ -249,6 +249,9 @@ healthpipe deidentify dataset.json -o deidentified.json --audit-log audit.json
 # Preview PHI findings without modifying the dataset
 healthpipe scan dataset.json --format markdown -o phi-scan.md --fail-on-phi
 
+# Validate dataset integrity before de-identification or synthesis
+healthpipe validate dataset.json --format json --fail-on error
+
 # Create a safe baseline, then fail CI only on newly introduced PHI
 healthpipe scan dataset.json --write-baseline phi-baseline.json
 healthpipe scan dataset.json --baseline phi-baseline.json --only-new --fail-on-new
@@ -267,6 +270,13 @@ healthpipe audit audit.json --format summary
 used in CI and review workflows without turning the report itself into a PHI
 artifact. Use `--include-values` only in a controlled environment when a human
 needs to inspect the exact source values.
+
+`healthpipe validate` checks ClinicalDataset JSON for duplicate internal or FHIR
+payload ids, stale checksums, missing or mismatched resource types, and broken
+patient subject references. Reports are PHI-safe: they include record ids,
+resource types, field paths, validation codes, and counts, not clinical payload
+values. Use `--fail-on error` for CI gates or `--fail-on warning` when onboarding
+sources that must be fully clean before downstream processing.
 
 For incremental source onboarding, `--write-baseline` stores stable
 fingerprints and hashes for known findings. Later scans can use `--baseline`,

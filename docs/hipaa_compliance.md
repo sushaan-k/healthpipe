@@ -91,6 +91,22 @@ Use them when onboarding a messy source gradually, or when CI should catch new
 PHI regressions without repeatedly failing on findings that have already been
 triaged by a privacy reviewer.
 
+### Dataset Integrity Gate
+
+Before running de-identification or producing synthetic data, validate that the
+normalized dataset is internally consistent:
+
+```bash
+healthpipe validate dataset.json --format markdown -o validation.md --fail-on error
+```
+
+The validation report is safe for CI logs because it reports only record ids,
+resource types, field paths, validation codes, and counts. It flags duplicate
+record ids, duplicate FHIR payload ids, stale checksums, resource type
+mismatches, missing patient subjects, and references to patients that are not
+present in the dataset. Use `--fail-on warning` for stricter source onboarding
+when even incomplete metadata should block downstream processing.
+
 After de-identification, use the re-identification risk gate to check whether
 quasi-identifier combinations remain too unique:
 

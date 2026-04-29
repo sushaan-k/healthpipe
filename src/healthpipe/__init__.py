@@ -102,6 +102,13 @@ from healthpipe.privacy.reidentification_risk import (
 from healthpipe.synthetic.generator import SyntheticGenerator, synthesize
 from healthpipe.synthetic.utility import UtilityReport, evaluate_utility
 from healthpipe.synthetic.validator import ReidentificationValidator
+from healthpipe.validation import (
+    DatasetValidationFinding,
+    DatasetValidationReport,
+    DatasetValidator,
+    ValidationSeverity,
+    validate_dataset,
+)
 
 __all__ = [
     "AuditEntry",
@@ -115,6 +122,9 @@ __all__ = [
     "ComplianceReporter",
     "Count",
     "DPResult",
+    "DatasetValidationFinding",
+    "DatasetValidationReport",
+    "DatasetValidator",
     "DateShiftError",
     "DeidentificationError",
     "DeidentifiedDataset",
@@ -158,10 +168,12 @@ __all__ = [
     "SyntheticGenerator",
     "UnsupportedFormatError",
     "UtilityReport",
+    "ValidationSeverity",
     "__version__",
     "deidentify",
     "evaluate_utility",
     "ingest",
     "private_stats",
     "synthesize",
+    "validate_dataset",
 ]

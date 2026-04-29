@@ -477,6 +477,127 @@ class TestCLIScan:
         assert "--only-new requires --baseline" in result.output
 
 
+class TestCLIValidate:
+    def test_validate_summary_passes_valid_dataset(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="patient-record",
+                    resource_type=ResourceType.PATIENT,
+                    data={"resourceType": "Patient", "id": "p1"},
+                    source_format="TEST",
+                ),
+                ClinicalRecord(
+                    id="obs-record",
+                    resource_type=ResourceType.OBSERVATION,
+                    data={
+                        "resourceType": "Observation",
+                        "subject": {"reference": "Patient/p1"},
+                    },
+                    source_format="TEST",
+                ),
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["validate", str(input_path)])
+
+        assert result.exit_code == 0
+        assert "Dataset Validation" in result.output
+        assert "Status: passed" in result.output
+        assert "Patient: 1" in result.output
+        assert "Observation: 1" in result.output
+
+    def test_validate_json_fails_on_errors(self, tmp_path: Path) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="bad-record",
+                    resource_type=ResourceType.OBSERVATION,
+                    data={
+                        "resourceType": "Observation",
+                        "subject": {"reference": "Patient/missing"},
+                        "note": "Patient Alice Smith called.",
+                    },
+                    source_format="TEST",
+                )
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["validate", str(input_path), "--format", "json", "--fail-on", "error"],
+        )
+
+        assert result.exit_code == 5
+        assert "Alice Smith" not in result.output
+        parsed = json.loads(result.output)
+        assert parsed["passed"] is False
+        assert parsed["error_count"] == 1
+        assert parsed["findings"][0]["code"] == "reference.unknown_patient"
+
+    def test_validate_writes_markdown_and_fails_on_warning(
+        self, tmp_path: Path
+    ) -> None:
+        from healthpipe.ingest.schema import (
+            ClinicalDataset,
+            ClinicalRecord,
+            ResourceType,
+        )
+
+        dataset = ClinicalDataset(
+            records=[
+                ClinicalRecord(
+                    id="empty-patient",
+                    resource_type=ResourceType.PATIENT,
+                    data={},
+                    source_format="TEST",
+                )
+            ]
+        )
+        input_path = tmp_path / "dataset.json"
+        output_path = tmp_path / "validation.md"
+        input_path.write_text(dataset.model_dump_json(indent=2))
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            [
+                "validate",
+                str(input_path),
+                "--format",
+                "markdown",
+                "-o",
+                str(output_path),
+                "--fail-on",
+                "warning",
+            ],
+        )
+
+        assert result.exit_code == 5
+        assert output_path.exists()
+        rendered = output_path.read_text()
+        assert "# healthpipe Dataset Validation Report" in rendered
+        assert "record.empty_data" in rendered
+
+
 class TestCLISynthesize:
     def test_synthesize_command(self, tmp_path: Path) -> None:
         from healthpipe.deidentify.safe_harbor import DeidentifiedDataset
