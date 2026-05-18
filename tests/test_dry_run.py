@@ -11,6 +11,7 @@ from healthpipe.deidentify.patterns import DetectionMethod, PHIMatch
 from healthpipe.ingest.csv_mapper import CSVSource
 from healthpipe.ingest.schema import ClinicalRecord, ResourceType
 from healthpipe.pipeline import (
+    DryRunFinding,
     DryRunReport,
     Pipeline,
     PipelineConfig,
@@ -199,6 +200,28 @@ class TestDryRun:
         payload = report.model_dump()
         assert payload["findings_by_category"] == report.findings_by_category
         assert payload["findings_by_record"] == report.findings_by_record
+        assert report.high_risk_records(min_findings=2)
+        assert all(count >= 2 for _record_id, count in report.high_risk_records())
+
+    def test_dry_run_high_risk_records_boundaries(self) -> None:
+        report = DryRunReport(
+            findings=[
+                DryRunFinding(record_id="b", category="EMAIL"),
+                DryRunFinding(record_id="b", category="PHONE"),
+                DryRunFinding(record_id="a", category="SSN"),
+                DryRunFinding(record_id="c", category="EMAIL"),
+                DryRunFinding(record_id="c", category="PHONE"),
+            ]
+        )
+
+        assert report.high_risk_records(min_findings=1) == [
+            ("b", 2),
+            ("c", 2),
+            ("a", 1),
+        ]
+        assert report.high_risk_records(min_findings=2) == [("b", 2), ("c", 2)]
+        assert report.high_risk_records(min_findings=3) == []
+        assert DryRunReport().high_risk_records() == []
 
 
 class TestCollectStringsWithPaths:

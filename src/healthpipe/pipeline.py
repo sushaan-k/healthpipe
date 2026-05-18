@@ -90,6 +90,16 @@ class DryRunReport(BaseModel):
         ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         return ranked[:limit]
 
+    def high_risk_records(self, min_findings: int = 2) -> list[tuple[str, int]]:
+        """Return records with at least ``min_findings`` PHI detections."""
+        ranked = sorted(
+            self.findings_by_record.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        return [
+            (record_id, count) for record_id, count in ranked if count >= min_findings
+        ]
+
 
 class PipelineConfig(BaseModel):
     """Configuration for a healthpipe pipeline run.
