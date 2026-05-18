@@ -106,6 +106,8 @@ class TestDryRun:
         assert result.dry_run_report is not None
         assert result.dry_run_report.total_phi_found == 0
         assert result.dry_run_report.categories_found == []
+        assert result.dry_run_report.findings_by_category == {}
+        assert result.dry_run_report.findings_by_record == {}
 
     @pytest.mark.asyncio
     async def test_dry_run_skips_deidentification(self, tmp_path: Path) -> None:
@@ -166,6 +168,37 @@ class TestDryRun:
         assert len(findings) == 1
         assert findings[0].detection_method == DetectionMethod.PATTERN
         assert findings[0].original == "123-45-6789"
+
+    @pytest.mark.asyncio
+    async def test_dry_run_report_exposes_breakdowns(self, tmp_path: Path) -> None:
+        csv_content = (
+            "patient_id,ssn,phone,email\n"
+            "P001,123-45-6789,555-123-4567,john@example.com\n"
+            "P002,987-65-4321,555-987-6543,jane@example.com\n"
+        )
+        fpath = tmp_path / "patients.csv"
+        fpath.write_text(csv_content)
+
+        config = PipelineConfig(
+            dry_run=True,
+            deid_config={"use_fallback_ner": True, "llm_verification": False},
+        )
+        result = await Pipeline(config).run([CSVSource(path=str(fpath))])
+
+        assert result.dry_run_report is not None
+        report = result.dry_run_report
+        assert sum(report.findings_by_record.values()) == report.total_phi_found
+        assert len(report.findings_by_record) == report.total_records_scanned
+        assert report.findings_by_category["SSN"] >= 1
+        assert report.findings_by_category["PHONE"] >= 1
+        assert report.findings_by_category["EMAIL"] >= 2
+        top_category, top_count = report.top_categories(limit=1)[0]
+        assert top_category in report.categories_found
+        assert top_count >= 2
+
+        payload = report.model_dump()
+        assert payload["findings_by_category"] == report.findings_by_category
+        assert payload["findings_by_record"] == report.findings_by_record
 
 
 class TestCollectStringsWithPaths:

@@ -66,6 +66,29 @@ class DryRunReport(BaseModel):
     total_records_scanned: int = 0
     total_phi_found: int = 0
     categories_found: list[str] = Field(default_factory=list)
+    findings_by_category: dict[str, int] = Field(default_factory=dict)
+    findings_by_record: dict[str, int] = Field(default_factory=dict)
+
+    def model_post_init(self, __context: Any) -> None:
+        """Populate derived breakdowns when callers provide raw findings."""
+        if not self.findings_by_category:
+            self.findings_by_category = self._count_by("category")
+        if not self.findings_by_record:
+            self.findings_by_record = self._count_by("record_id")
+
+    def _count_by(self, field_name: str) -> dict[str, int]:
+        """Count findings by a named DryRunFinding string field."""
+        counts: dict[str, int] = {}
+        for finding in self.findings:
+            value = getattr(finding, field_name)
+            counts[value] = counts.get(value, 0) + 1
+        return dict(sorted(counts.items()))
+
+    def top_categories(self, limit: int = 3) -> list[tuple[str, int]]:
+        """Return the most frequent PHI categories in descending order."""
+        counts = self.findings_by_category
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return ranked[:limit]
 
 
 class PipelineConfig(BaseModel):
