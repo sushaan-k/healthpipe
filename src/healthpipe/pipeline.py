@@ -92,6 +92,9 @@ class DryRunReport(BaseModel):
 
     def high_risk_records(self, min_findings: int = 2) -> list[tuple[str, int]]:
         """Return records with at least ``min_findings`` PHI detections."""
+        if min_findings < 1:
+            raise ValueError("min_findings must be at least 1")
+
         ranked = sorted(
             self.findings_by_record.items(),
             key=lambda item: (-item[1], item[0]),
