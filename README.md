@@ -389,4 +389,4 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
-Built by [Sushaan Kandukoori](https://github.com/sushaan-k) | [vytus.health](https://vytus.health)
+Built by [Sushaan Kandukoori](https://www.sushaan.com).
